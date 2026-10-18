@@ -13,7 +13,7 @@ A Model Context Protocol server that enables AI agents to autonomously manage in
 ## Capabilities / Tools List
 
 - **`get_pending_parcels`**: Fetches the current ledger of uncollected packages, highlights aging stats (5+ days), and returns structured JSON context.
-- **`log_incoming_parcel`**: Accepts parsed text from Google Cloud Vision OCR label scans, cross-references internal Firestore unit listings, and schedules automated email alerts via SendGrid.
+- **`log_incoming_parcel`**: Accepts parsed text from Google Cloud Vision OCR label scans and/or external `photoUrl` links (automatically downloaded and hosted on Firebase Storage), cross-references internal Firestore unit listings, and schedules automated email alerts via SendGrid and US (`+1`) SMS alerts via the Quo Phone API.
 - **`release_parcel_with_signature`**: Updates parcel state to `Picked Up`, records the timestamp, and securely saves the digital signature PNG layout to Firebase Storage.
 
 ---
