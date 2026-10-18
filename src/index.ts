@@ -98,6 +98,95 @@ function isTrustedStorageUrl(url: string): boolean {
   }
 }
 
+export interface McpAuthContext {
+  businessId: string;
+  uid?: string;
+  source?: 'oauth' | 'firebase_token' | 'header' | 'env';
+}
+
+export class TenantIsolationForbiddenError extends Error {
+  readonly status = 403;
+  readonly code = 'FORBIDDEN';
+
+  constructor(
+    message = '403 Forbidden: Cross-tenant access denied. Requested businessId does not match authenticated businessId.'
+  ) {
+    super(message);
+    this.name = 'TenantIsolationForbiddenError';
+  }
+}
+
+const SAFE_TENANT_ID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
+
+export function enforceTenantBusinessId(
+  authContext: McpAuthContext | undefined,
+  requestedBusinessId?: unknown
+): string {
+  const authedBusinessId =
+    typeof authContext?.businessId === 'string'
+      ? authContext.businessId.trim()
+      : '';
+  if (!authedBusinessId || !SAFE_TENANT_ID_REGEX.test(authedBusinessId)) {
+    throw new TenantIsolationForbiddenError(
+      '403 Forbidden: Missing or invalid authenticated businessId in session context.'
+    );
+  }
+
+  if (
+    typeof requestedBusinessId === 'string' &&
+    requestedBusinessId.trim().length > 0 &&
+    requestedBusinessId.trim() !== authedBusinessId
+  ) {
+    throw new TenantIsolationForbiddenError(
+      `403 Forbidden: Cross-tenant access denied. Requested businessId "${requestedBusinessId.trim()}" does not match authenticated businessId.`
+    );
+  }
+
+  return authedBusinessId;
+}
+
+export async function resolveMcpAuthContext(
+  explicitAuth?: McpAuthContext
+): Promise<McpAuthContext | undefined> {
+  if (explicitAuth?.businessId) {
+    return explicitAuth;
+  }
+  const rawToken = process.env.GLAMA_OAUTH_TOKEN?.trim() || process.env.FIREBASE_AUTH_TOKEN?.trim() || '';
+  if (rawToken) {
+    try {
+      const decoded = await ensureFirebaseApp().auth().verifyIdToken(rawToken);
+      const claimBizId =
+        typeof (decoded as Record<string, unknown>).businessId === 'string'
+          ? String((decoded as Record<string, unknown>).businessId).trim()
+          : decoded.uid;
+      if (claimBizId && SAFE_TENANT_ID_REGEX.test(claimBizId)) {
+        return { businessId: claimBizId, uid: decoded.uid, source: 'firebase_token' };
+      }
+    } catch {
+      const parts = rawToken.split('.');
+      if (parts.length === 3 && parts[1]) {
+        try {
+          const payload = JSON.parse(
+            Buffer.from(parts[1], 'base64url').toString('utf8')
+          ) as Record<string, unknown>;
+          const candidate =
+            payload.businessId ?? payload.business_id ?? payload.tenant_id ?? payload.sub;
+          if (typeof candidate === 'string' && SAFE_TENANT_ID_REGEX.test(candidate.trim())) {
+            return { businessId: candidate.trim(), source: 'oauth' };
+          }
+        } catch {
+          // Ignore malformed token
+        }
+      }
+    }
+  }
+  const envBusinessId = process.env.TRACKKR_BUSINESS_ID?.trim() ?? '';
+  if (envBusinessId && SAFE_TENANT_ID_REGEX.test(envBusinessId)) {
+    return { businessId: envBusinessId, source: 'env' };
+  }
+  return undefined;
+}
+
 export const GetPendingParcelsInputSchema = z.object({
   businessId: z
     .string()
@@ -105,8 +194,7 @@ export const GetPendingParcelsInputSchema = z.object({
     .min(1)
     .max(128)
     .regex(/^[A-Za-z0-9_-]{1,128}$/)
-    .optional()
-    .describe('Optional tenant businessId filter. When provided, scans only that property.'),
+    .describe('Authenticated tenant businessId. Strictly scoped to a single property.'),
   thresholdDays: z
     .number()
     .min(1)
@@ -554,51 +642,62 @@ async function emitTelemetry(params: {
 
 export async function callTool(
   name: string,
-  args: Record<string, unknown> = {}
-): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
+  args: Record<string, unknown> = {},
+  authContext?: McpAuthContext
+): Promise<{
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+  statusCode?: number;
+}> {
   try {
+    const resolvedAuth = authContext ?? (await resolveMcpAuthContext());
+    const authedBusinessId = enforceTenantBusinessId(
+      resolvedAuth,
+      args.businessId
+    );
+    const tenantScopedArgs: Record<string, unknown> = {
+      ...args,
+      businessId: authedBusinessId,
+    };
+
     if (name === 'get_pending_parcels' || name === 'checkStaleParcels') {
-      const options = GetPendingParcelsInputSchema.parse(args);
+      const options = GetPendingParcelsInputSchema.parse(tenantScopedArgs);
       const db = ensureFirebaseApp().firestore();
       const nowMs = Date.now();
       const thresholdMs = options.thresholdDays * DAY_MS;
 
-      const bizDocs = options.businessId
-        ? [await db.doc(`businesses/${options.businessId}`).get()].filter((d) => d.exists)
-        : (await db.collection('businesses').limit(50).get()).docs;
+      // Hardcoded tenant filter — never queries across all businesses
+      const pendingSnap = await db
+        .collection(`businesses/${authedBusinessId}/parcels`)
+        .where('businessID', '==', authedBusinessId)
+        .where('status', '==', 'Pending')
+        .get();
 
       const parcels: Array<Record<string, unknown>> = [];
-      for (const biz of bizDocs) {
+      for (const pDoc of pendingSnap.docs) {
         if (parcels.length >= options.maxResults) break;
-        const pendingSnap = await db
-          .collection(`businesses/${biz.id}/parcels`)
-          .where('status', '==', 'Pending')
-          .get();
+        const p = pDoc.data();
+        if (p.businessID !== authedBusinessId) continue;
+        const dateReceived = typeof p.dateReceived === 'string' ? p.dateReceived : '';
+        const receivedMs = /^\d{4}-\d{2}-\d{2}$/.test(dateReceived)
+          ? Date.parse(`${dateReceived}T00:00:00.000Z`)
+          : nowMs;
+        const elapsedMs = Math.max(0, nowMs - receivedMs);
+        if (elapsedMs < thresholdMs) continue;
 
-        for (const pDoc of pendingSnap.docs) {
-          if (parcels.length >= options.maxResults) break;
-          const p = pDoc.data();
-          const dateReceived = typeof p.dateReceived === 'string' ? p.dateReceived : '';
-          const receivedMs = /^\d{4}-\d{2}-\d{2}$/.test(dateReceived)
-            ? Date.parse(`${dateReceived}T00:00:00.000Z`)
-            : nowMs;
-          const elapsedMs = Math.max(0, nowMs - receivedMs);
-          if (elapsedMs < thresholdMs) continue;
-
-          parcels.push({
-            parcelId: pDoc.id,
-            businessId: biz.id,
-            recordNumber: p.recordNumber ?? pDoc.id,
-            unitId: p.unitID ?? '',
-            occupantId: p.occupantID ?? '',
-            typeOfMail: p.typeOfMail ?? 'other',
-            qty: p.qty ?? 1,
-            dateReceived,
-            ageDays: Math.floor(elapsedMs / DAY_MS),
-            ageHours: Math.round((elapsedMs / HOUR_MS) * 10) / 10,
-            isCriticallyStale: Boolean(p.isCriticallyStale),
-          });
-        }
+        parcels.push({
+          parcelId: pDoc.id,
+          businessId: authedBusinessId,
+          recordNumber: p.recordNumber ?? pDoc.id,
+          unitId: p.unitID ?? '',
+          occupantId: p.occupantID ?? '',
+          typeOfMail: p.typeOfMail ?? 'other',
+          qty: p.qty ?? 1,
+          dateReceived,
+          ageDays: Math.floor(elapsedMs / DAY_MS),
+          ageHours: Math.round((elapsedMs / HOUR_MS) * 10) / 10,
+          isCriticallyStale: Boolean(p.isCriticallyStale),
+        });
       }
 
       return {
@@ -608,6 +707,7 @@ export async function callTool(
             text: JSON.stringify(
               {
                 generatedAt: new Date(nowMs).toISOString(),
+                businessId: authedBusinessId,
                 thresholdDays: options.thresholdDays,
                 totalPendingStaleParcels: parcels.length,
                 parcels,
@@ -621,7 +721,7 @@ export async function callTool(
     }
 
     if (name === 'log_incoming_parcel' || name === 'logIncomingParcel') {
-      const input = LogIncomingParcelInputSchema.parse(args);
+      const input = LogIncomingParcelInputSchema.parse(tenantScopedArgs);
       const db = ensureFirebaseApp().firestore();
       const nowMs = Date.now();
       const ts = defaultTimestamps(new Date(nowMs));
@@ -634,14 +734,14 @@ export async function callTool(
         trackingNumber && !isUnknown
           ? crypto
               .createHash('sha256')
-              .update(`${input.businessId}:${unitId}:${trackingNumber}`)
+              .update(`${authedBusinessId}:${unitId}:${trackingNumber}`)
               .digest('hex')
               .slice(0, 48)
           : null;
 
       const outcome = await db.runTransaction(async (tx) => {
         if (lockKey) {
-          const lockRef = db.doc(`businesses/${input.businessId}/parcelLocks/${lockKey}`);
+          const lockRef = db.doc(`businesses/${authedBusinessId}/parcelLocks/${lockKey}`);
           const lockSnap = await tx.get(lockRef);
           if (lockSnap.exists) {
             const lockData = lockSnap.data() ?? {};
@@ -661,12 +761,12 @@ export async function callTool(
           }
         }
 
-        const parcelRef = db.collection(`businesses/${input.businessId}/parcels`).doc();
+        const parcelRef = db.collection(`businesses/${authedBusinessId}/parcels`).doc();
         const recordNumber = `TRK-${100000 + crypto.randomInt(0, 900000)}`;
         tx.set(parcelRef, {
           parcelID: parcelRef.id,
           recordNumber,
-          businessID: input.businessId,
+          businessID: authedBusinessId,
           unitID: unitId,
           occupantID: occupantId,
           typeOfMail: input.typeOfMail,
@@ -684,7 +784,7 @@ export async function callTool(
         });
 
         if (lockKey) {
-          tx.set(db.doc(`businesses/${input.businessId}/parcelLocks/${lockKey}`), {
+          tx.set(db.doc(`businesses/${authedBusinessId}/parcelLocks/${lockKey}`), {
             lockKey,
             parcelId: parcelRef.id,
             recordNumber,
@@ -704,7 +804,7 @@ export async function callTool(
         eventType: outcome.status.includes('DUPLICATE')
           ? 'PARCEL_DEDUPLICATED'
           : 'PARCEL_SCANNED',
-        businessId: input.businessId,
+        businessId: authedBusinessId,
         parcelId: outcome.parcelId,
         unitId,
         occupantId,
@@ -721,7 +821,7 @@ export async function callTool(
             text: JSON.stringify(
               {
                 ...outcome,
-                businessId: input.businessId,
+                businessId: authedBusinessId,
                 unitId,
                 occupantId,
                 trackingNumber,
@@ -739,10 +839,21 @@ export async function callTool(
       name === 'release_parcel_with_signature' ||
       name === 'releaseParcelWithSignature'
     ) {
-      const input = ReleaseParcelInputSchema.parse(args);
+      const input = ReleaseParcelInputSchema.parse(tenantScopedArgs);
       const db = ensureFirebaseApp().firestore();
       const ts = defaultTimestamps();
-      const parcelRef = db.doc(`businesses/${input.businessId}/parcels/${input.parcelId}`);
+      const parcelRef = db.doc(`businesses/${authedBusinessId}/parcels/${input.parcelId}`);
+
+      const parcelSnap = await parcelRef.get();
+      if (!parcelSnap.exists) {
+        throw new Error(`Parcel ${input.parcelId} not found in business ${authedBusinessId}.`);
+      }
+      const pData = parcelSnap.data() ?? {};
+      if (typeof pData.businessID === 'string' && pData.businessID !== authedBusinessId) {
+        throw new TenantIsolationForbiddenError(
+          '403 Forbidden: Parcel businessID does not match authenticated tenant.'
+        );
+      }
 
       const signatureUrl = input.signatureUrl?.trim() || 'https://storage.googleapis.com/signature.png';
       await parcelRef.update({
@@ -756,7 +867,7 @@ export async function callTool(
 
       const telemetryEventId = await emitTelemetry({
         eventType: 'PARCEL_RELEASED',
-        businessId: input.businessId,
+        businessId: authedBusinessId,
         parcelId: input.parcelId,
         unitId: '',
         occupantId: '',
@@ -773,7 +884,7 @@ export async function callTool(
             text: JSON.stringify(
               {
                 status: 'RELEASED',
-                businessId: input.businessId,
+                businessId: authedBusinessId,
                 parcelId: input.parcelId,
                 pickedUpBy: input.pickedUpBy,
                 signatureUrl,
@@ -792,10 +903,21 @@ export async function callTool(
       content: [{ type: 'text', text: `Unknown tool: ${name}` }],
     };
   } catch (err) {
+    const isForbidden = err instanceof TenantIsolationForbiddenError;
     const message = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+      statusCode: isForbidden ? 403 : 400,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            status: isForbidden ? 403 : 400,
+            code: isForbidden ? 'FORBIDDEN' : 'BAD_REQUEST',
+            error: message,
+          }),
+        },
+      ],
     };
   }
 }
