@@ -3,6 +3,16 @@
   "name": "io.github.ralf206/trackkr-mcp",
   "title": "Trackkr MCP Server — Smart Lockerless Parcel Management",
   "description": "Lockerless multi-tenant parcel tracking and secure signature logging.",
-  "version": "2.1.0",
-  "websiteUrl": "https://trackkr.app/agentic-automation"
+  "version": "2.1.1",
+  "websiteUrl": "https://trackkr.app/agentic-automation",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://glama.ai/endpoints/xuvltpe45j/mcp"
+    },
+    {
+      "type": "streamable-http",
+      "url": "https://trackkr.app/mcp"
+    }
+  ]
 }

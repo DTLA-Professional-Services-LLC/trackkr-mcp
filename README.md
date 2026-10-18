@@ -3,6 +3,8 @@
 A Model Context Protocol server that enables AI agents to autonomously manage incoming packages, log parcels, cross-reference unit directories, and track pick-up signatures without physical locker hardware.
 
 - **Website:** [https://trackkr.app](https://trackkr.app)
+- **Glama MCP Endpoint:** [https://glama.ai/endpoints/xuvltpe45j/mcp](https://glama.ai/endpoints/xuvltpe45j/mcp)
+- **Direct MCP Endpoint:** [https://trackkr.app/mcp](https://trackkr.app/mcp)
 - **Repository:** [https://github.com/DTLA-Professional-Services-LLC/trackkr-mcp](https://github.com/DTLA-Professional-Services-LLC/trackkr-mcp)
 - **License:** MIT
 
