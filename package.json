@@ -1,0 +1,49 @@
+{
+  "name": "trackkr-mcp",
+  "version": "2.1.0",
+  "description": "An MCP server for lockerless multi-tenant parcel logging, secure signature collection, and automated notifications.",
+  "homepage": "https://trackkr.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DTLA-Professional-Services-LLC/trackkr-mcp.git"
+  },
+  "license": "MIT",
+  "author": "DTLA Professional Services, LLC (https://trackkr.app)",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "logistics",
+    "parcel-tracking",
+    "firebase-mcp",
+    "mailroom-automation",
+    "trackkr"
+  ],
+  "main": "./dist/index.js",
+  "bin": {
+    "trackkr-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "server.json",
+    "glama.json",
+    "smithery.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "start": "node ./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.10.0",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

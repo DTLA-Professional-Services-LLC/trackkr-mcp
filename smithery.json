@@ -1,0 +1,37 @@
+{
+  "$schema": "https://smithery.ai/schema/smithery.json",
+  "name": "trackkr-mcp",
+  "displayName": "Trackkr MCP Server — Smart Lockerless Parcel Management",
+  "description": "Lockerless multi-tenant parcel tracking and secure signature logging.",
+  "version": "2.1.0",
+  "homepage": "https://trackkr.app",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "logistics",
+    "parcel-tracking",
+    "firebase-mcp"
+  ],
+  "startCommand": {
+    "type": "stdio",
+    "configSchema": {
+      "type": "object",
+      "required": ["FIREBASE_CONFIG_JSON"],
+      "properties": {
+        "FIREBASE_CONFIG_JSON": {
+          "type": "string",
+          "description": "Path or JSON string for your authorized Firebase service account credentials."
+        },
+        "USE_MOCK_OCR": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set to true during local staging to bypass paid Google Cloud Vision API billing counters."
+        }
+      }
+    },
+    "commandFunction": {
+      "command": "node",
+      "args": ["./dist/index.js"]
+    }
+  }
+}
