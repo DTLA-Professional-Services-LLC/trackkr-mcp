@@ -1,34 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "DTLA-Professional-Services-LLC/trackkr-mcp",
+  "name": "io.github.ralf206/trackkr-mcp",
+  "title": "Trackkr MCP Server — Smart Lockerless Parcel Management",
   "description": "Lockerless multi-tenant parcel tracking and secure signature logging.",
   "version": "2.1.0",
-  "repository": {
-    "url": "https://github.com/DTLA-Professional-Services-LLC/trackkr-mcp",
-    "source": "github"
-  },
-  "packages": [
-    {
-      "registryType": "github",
-      "identifier": "DTLA-Professional-Services-LLC/trackkr-mcp",
-      "version": "2.1.0",
-      "transport": {
-        "type": "stdio"
-      },
-      "environmentVariables": [
-        {
-          "name": "FIREBASE_CONFIG_JSON",
-          "description": "Path or JSON string for your authorized Firebase service account credentials.",
-          "isRequired": true,
-          "isSecret": true
-        },
-        {
-          "name": "USE_MOCK_OCR",
-          "description": "Set to true during local staging to bypass paid Google Cloud Vision API billing counters.",
-          "isRequired": false,
-          "isSecret": false
-        }
-      ]
-    }
-  ]
+  "websiteUrl": "https://trackkr.app/agentic-automation"
 }
